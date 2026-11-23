@@ -10,10 +10,21 @@ composer install
 
 Edit `config.php`:
 
-- `api`: base URL of the Alix servlet (before the index name)
-- `mode`: `single` or `multi`
-- `default`: base used by single mode
-- `bases`: public base keys mapped to servlet index names, titles, and document ID regexes
+- `api`: Alix servlet base URL, before the corpus name
+- `mode`: `single` or `multi` (explicit; not derived from the number of corpora)
+- `default`: corpus name for single mode
+- `cacheFile`: writable file outside the web root for the servlet's `/` JSON
+- `cacheTtl`: number of seconds before attempting a refresh (default 300)
+
+No local list of bases or document regexes. Alix's root JSON provides names,
+labels, counts, and optional `docprefix`. `docprefix` is a whitespace-separated
+list of **literal prefixes**, not glob or regex patterns. `docprefix` is optional.
+
+The root registry is fetched on the first request, then cached to disk.
+Concurrent refreshes are serialized with `flock`, and an old cache is retained
+when a refresh fails. Search results and documents are always fetched live.
+If newly published metadata is needed immediately, delete `var/cache/bases.json`
+(and keep the directory writable).
 
 To try the PHP development server:
 
@@ -21,42 +32,41 @@ To try the PHP development server:
 php -S 127.0.0.1:8000 -t public public/index.php
 ```
 
-Apache may use `public/` as its document root with the included `.htaccess`.
-With nginx, use `try_files $uri /index.php?$query_string;` (configured for the `public/` document root).
+Apache may use `public/` as its document root with `.htaccess`.
+With nginx, use `try_files $uri /index.php?$query_string;` for the `public/` root.
 
 ## Routes
 
 | Page | `single` | `multi` |
 |---|---|---|
-| Base directory | — | `/` |
-| Base welcome | `/` | `/{base}` |
+| Corpus directory | — | `/` |
+| Corpus welcome | `/` | `/{base}` |
 | Search | `/q?q=amour` | `/{base}/q?q=amour` |
-| Document | `/{doc}` | `/{base}/{doc}` |
+| Document matching `docprefix` | `/{doc}` | `/{base}/{doc}` |
+| Other document | `/doc/{doc}` | `/{base}/doc/{doc}` |
 
-A configured `docPattern` constrains document identifiers. In `multi` mode,
-this validation occurs after route matching because each base can use a different pattern.
+If no `docprefix` exists, only the `/doc/{doc}` route is accepted for documents.
+The servlet performs the actual document existence check. Static routes like
+`/q` are reserved for the application and take priority over document paths.
 
 ## HTML fragments
 
-Search pages request `/{index}/results.html?q=…` from Alix.
-Document pages request `/{index}/{doc}.html` from Alix, using the servlet's
-direct document ID fallback.
+Search uses `/{base}/results.html?q=...`, while document pages use
+`/{base}/{doc}.html`. The PHP frontend does not duplicate the servlet's JSON
+field inventory; it only reads the root registry needed for navigation.
 
-HTML responses are inserted directly in `q.php` and `doc.php`. This assumes
-that the configured Alix servlet and its indexed HTML are trusted.
-Relative document links in search results resolve to the short public paths
-because the search URL is `/q` or `/{base}/q`.
+The servlet emits relative links to documents inside `results.html`. The PHP
+client adjusts those anchors to the appropriate public document paths, preserving
+query strings and fragments. Relative `?from=...` pagination URLs are untouched.
+This rewriting is intended specifically for Alix's generated results markup.
+
+HTML fragments are rendered unescaped; configure only a trusted Alix servlet.
 
 ## Files
 
-- `public/index.php`: front controller and routes
-- `src/Alix.php`: tiny HTTP client, independent of FastRoute
-- `src/functions.php`: URL generation and native template rendering
-- `templates/layout.php`: common HTML shell
-- `templates/bases.php`: multi-base welcome
-- `templates/base.php`: one-base welcome
-- `templates/q.php`: search form and result fragment
-- `templates/doc.php`: document fragment
+- `public/index.php`: routing and page controller
+- `src/Alix.php`: HTTP client plus file-backed corpus registry cache
+- `src/functions.php`: URL helpers, fragment link rewriting, native templates
+- `templates/`: common layout and welcome, search, document, error pages
 
-The reference app depends on FastRoute; the `Alix` client does not.
-
+FastRoute is used by the reference application, not by the `Alix` client class.
